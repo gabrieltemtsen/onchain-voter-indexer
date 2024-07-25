@@ -123,23 +123,50 @@ async function reconcilePastEvents(
   contractService: OptimisticContractService,
   eventService: EventService
 ) {
+  const BLOCK_RANGE_LIMIT = 500; // Reduced block range
   let chainProvider = getProvider(NETWORK, ALCHEMY_API_KEY_FOR_RECONCILIATION);
   let chainService = new ChainServiceImpl(chainProvider);
   let contracts = await contractService.getActiveContracts();
+
   for (let OptimisticContract of contracts) {
     const chainContract = new Contract(
       OptimisticContract.address,
       OptimisticContract.abi,
       chainProvider
     );
-    await new SweepingIndexerServiceImpl(
-      OptimisticContract,
-      chainContract,
-      eventService,
-      chainService
-    ).reconcilePastEvents();
+
+    // Get the latest block number
+    const latestBlock = await chainProvider.getBlockNumber();
+    let startBlock = OptimisticContract.startIdx;
+
+    // Reconcile events in smaller block ranges
+    while (startBlock < latestBlock) {
+      const endBlock = Math.min(startBlock + BLOCK_RANGE_LIMIT, latestBlock);
+      console.log(`Reconciling events from block ${startBlock} to ${endBlock}`);
+
+      try {
+        await new SweepingIndexerServiceImpl(
+          OptimisticContract,
+          chainContract,
+          eventService,
+          chainService
+        ).reconcilePastEvents();
+      } catch (error: any) {
+        console.error(`Error reconciling blocks ${startBlock}-${endBlock}:`, error);
+
+        // Check for specific error and adjust behavior if necessary
+        if (error.message.includes('Log response size exceeded')) {
+          console.warn(`Log response size exceeded at blocks ${startBlock}-${endBlock}. Consider reducing the block range.`);
+          // You may decide to break out of the loop or continue with a different approach
+        }
+      }
+
+      startBlock = endBlock + 1;
+    }
   }
 }
+
+
 
 async function runIndexer(
   db: Db,
